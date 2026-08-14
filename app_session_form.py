@@ -535,7 +535,7 @@ def generate_token():
 
 BASE_URL = os.environ.get("APP_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "http://10.70.112.87:8000"
 TOKEN_TTL_SECONDS = 12   # how long the QR itself stays scannable — keeps forwarding hard
-ANSWER_WINDOW_SECONDS = 120  # once a student has scanned in, how long they get to submit
+ANSWER_WINDOW_SECONDS = 36000  # once a student has scanned in, how long they get to submit
 
 # The real Google Form URL. Kept server-side only and injected into
 # mark.html as an iframe src ONLY after a request has already passed the
