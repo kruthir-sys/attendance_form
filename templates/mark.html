@@ -62,6 +62,24 @@
         margin-top: 18px;
         font-size: 0.95rem;
     }
+    #form-wrap {
+        margin-bottom: 16px;
+        text-align: left;
+    }
+    #form-wrap iframe {
+        width: 100%;
+        height: 420px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+    }
+    #form-locked-msg {
+        font-size: 0.9rem;
+        color: #6b7280;
+        text-align: center;
+        padding: 24px 8px;
+        border: 1px dashed #d1d5db;
+        border-radius: 8px;
+    }
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -76,6 +94,11 @@
             <div id="g_id_signin"></div>
             <p id="signed-in-as" style="display:none; font-size:0.9rem; color:#16a34a; font-weight:600; margin-top:8px;"></p>
         </div>
+
+        <div id="form-wrap">
+            <div id="form-locked-msg">🔒 Sign in with Google to unlock the question form</div>
+        </div>
+
         <select id="session_select" name="session" required style="width:100%; padding:12px; font-size:1rem; border:1px solid #d1d5db; border-radius:8px; box-sizing:border-box; margin-bottom:16px; background:#fff;">
             <option value="" disabled selected>Select your session</option>
             {% for s in session_options %}
@@ -94,6 +117,11 @@
 
 <script>
     const GOOGLE_CLIENT_ID = "{{ google_client_id }}";
+    // Only reaches the browser at all once /mark has already passed its
+    // token + campus checks server-side — same gate as the rest of this
+    // page. Not injected into the DOM as a link/iframe until AFTER sign-in,
+    // so it never appears as a visible or copyable URL before that point.
+    const GOOGLE_FORM_URL = "{{ google_form_url }}";
     let googleSignedIn = false;
 
     // --- Countdown, mirrors the server-side ANSWER_WINDOW_SECONDS check ---
@@ -129,6 +157,17 @@
             label.textContent = "✔ Signed in as " + payload.email;
             label.style.display = 'block';
         } catch (e) { /* display-only, safe to ignore */ }
+
+        // Reveal the question form only now, and only inside this page —
+        // never as a plain link, never in a new tab.
+        const formWrap = document.getElementById('form-wrap');
+        if (GOOGLE_FORM_URL) {
+            formWrap.innerHTML = '<iframe src="' + GOOGLE_FORM_URL +
+                '" title="Question form" loading="lazy"></iframe>';
+        } else {
+            formWrap.innerHTML =
+                "<p style='color:#dc2626; text-align:center;'>Question form isn't configured. Contact your instructor.</p>";
+        }
 
         if (remaining > 0) {
             submitBtn.disabled = false;
@@ -187,7 +226,7 @@
 
         if (!googleSignedIn) {
             document.getElementById('result').innerHTML =
-                "<p style='color:#dc2626;'>❌ Please sign in with your Google account first.</p>";
+                "<p style='color:#dc2626;'>❌ Please sign in with your BITS Google account first.</p>";
             return;
         }
 
