@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: simple-attendance
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app_session.py
+    envVars:
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false        # paste the full credentials.json contents in the Render dashboard, not in Git
+      - key: SPREADSHEET_NAME
+        value: "attendence_excel"
+      - key: WORKSHEET_NAME
+        value: "Sheet1"
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false         # set your own admin password in the Render dashboard
+      - key: SESSION_OPTIONS
+        value: "Session1,Session2,Session3,Session4,Session5,Tutorial1,Tutorial2,Tutorial3,Tutorial4,Tutorial5"
+      - key: CAMPUS_IP_RANGES
+        value: ""           # leave blank to disable, or set to your campus's PUBLIC IP/CIDR

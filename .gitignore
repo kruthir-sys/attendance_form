@@ -1,0 +1,6 @@
+credentials.json
+flask_session/
+*.csv
+fingerprints.log
+__pycache__/
+*.pyc

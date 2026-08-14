@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attendance Stats</title>
+<style>
+    body {
+        font-family: Arial, Helvetica, sans-serif;
+        background: #f4f6f8;
+        margin: 0;
+        padding: 24px;
+    }
+    .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+    }
+    h2 {
+        color: #1f2937;
+    }
+    .controls {
+        background: #fff;
+        padding: 16px 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+    }
+    .controls input[type="text"],
+    .controls select {
+        padding: 8px 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 0.95rem;
+    }
+    .controls button {
+        padding: 8px 16px;
+        background: #2563eb;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+    }
+    .summary {
+        background: #fff;
+        padding: 16px 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .summary .count {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #16a34a;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    th, td {
+        padding: 10px 14px;
+        text-align: left;
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 0.92rem;
+    }
+    th {
+        background: #f9fafb;
+        color: #374151;
+    }
+    .download-link {
+        text-decoration: none;
+        color: #2563eb;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+    .empty {
+        padding: 30px;
+        text-align: center;
+        color: #9ca3af;
+        background: #fff;
+        border-radius: 10px;
+    }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h2>📊 Attendance Stats</h2>
+
+    <form class="controls" method="POST">
+        <label for="date">Date:</label>
+        <input type="text" id="date" name="date" value="{{ date }}" placeholder="YYYY-MM-DD">
+
+        <label for="session">Session:</label>
+        <select id="session" name="session">
+            <option value="" {% if not session_selected %}selected{% endif %}>All Sessions</option>
+            {% for s in session_options %}
+            <option value="{{ s }}" {% if session_selected == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+
+        <button type="submit">View</button>
+        <a class="download-link" href="/stats/download?date={{ date | urlencode }}&session={{ session_selected | urlencode }}">⬇ Download CSV</a>
+    </form>
+
+    <div class="summary">
+        <span>Attendance for <b>{{ date }}</b>{% if session_selected %} &middot; <b>{{ session_selected }}</b>{% endif %}</span>
+        <span class="count">{{ attended }}</span>
+    </div>
+
+    {% if session_stats %}
+    <table style="margin-bottom:20px;">
+        <thead>
+            <tr>
+                <th>Session</th>
+                <th>Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s, stat in session_stats.items() %}
+            <tr>
+                <td>{{ s }}</td>
+                <td>{{ stat.total }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if attendees %}
+    <table>
+        <thead>
+            <tr>
+                <th>Student ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Session</th>
+                <th>Time</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in attendees %}
+            <tr>
+                <td>{{ a.student_id }}</td>
+                <td>{{ a.name }}</td>
+                <td>{{ a.email }}</td>
+                <td>{{ a.session }}</td>
+                <td>{{ a.time }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No attendance recorded for this date yet.</div>
+    {% endif %}
+</div>
+</body>
+</html>

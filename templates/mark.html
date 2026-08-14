@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mark Attendance</title>
+<style>
+    body {
+        font-family: Arial, Helvetica, sans-serif;
+        background: #f4f6f8;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+    }
+    .card {
+        background: #fff;
+        padding: 32px 28px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        width: 90%;
+        max-width: 380px;
+        text-align: center;
+    }
+    h2 {
+        margin-top: 0;
+        color: #1f2937;
+    }
+    #timer {
+        font-size: 0.95rem;
+        color: #dc2626;
+        font-weight: 600;
+        margin-bottom: 18px;
+    }
+    input[type="text"] {
+        width: 100%;
+        padding: 12px;
+        font-size: 1rem;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        box-sizing: border-box;
+        margin-bottom: 16px;
+    }
+    button {
+        width: 100%;
+        padding: 12px;
+        font-size: 1rem;
+        font-weight: 600;
+        background: #2563eb;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+    button:disabled {
+        background: #9ca3af;
+        cursor: not-allowed;
+    }
+    #result {
+        margin-top: 18px;
+        font-size: 0.95rem;
+    }
+</style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+<div class="card">
+    <h2>✅ Mark Attendance</h2>
+    <div id="timer">Time remaining: <span id="seconds">{{ remaining_seconds }}</span>s</div>
+
+    <form id="attendance-form">
+        <div id="google-signin-wrap" style="margin-bottom:16px;">
+            <div id="g_id_signin"></div>
+            <p id="signed-in-as" style="display:none; font-size:0.9rem; color:#16a34a; font-weight:600; margin-top:8px;"></p>
+        </div>
+        <select id="session_select" name="session" required style="width:100%; padding:12px; font-size:1rem; border:1px solid #d1d5db; border-radius:8px; box-sizing:border-box; margin-bottom:16px; background:#fff;">
+            <option value="" disabled selected>Select your session</option>
+            {% for s in session_options %}
+            <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+        </select>
+
+        <input type="hidden" id="token" name="token" value="{{ token }}">
+        <input type="hidden" id="fingerprint" name="fingerprint" value="">
+        <input type="hidden" id="google_id_token" name="google_id_token" value="">
+        <button type="submit" id="submit-btn" disabled>Sign in with Google first</button>
+    </form>
+
+    <div id="result"></div>
+</div>
+
+<script>
+    const GOOGLE_CLIENT_ID = "{{ google_client_id }}";
+    let googleSignedIn = false;
+
+    // --- Countdown, mirrors the server-side ANSWER_WINDOW_SECONDS check ---
+    let remaining = parseInt(document.getElementById('seconds').textContent, 10) || 0;
+    const secondsEl = document.getElementById('seconds');
+    const submitBtn = document.getElementById('submit-btn');
+
+    const countdown = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+            remaining = 0;
+            clearInterval(countdown);
+            submitBtn.disabled = true;
+            document.getElementById('result').innerHTML =
+                "<p style='color:#dc2626;'>⏱ Time's up. Please rescan the QR code.</p>";
+        }
+        secondsEl.textContent = remaining;
+    }, 1000);
+
+    // --- Google Sign-In: this is what actually identifies the student now,
+    // not a freely-typed Student ID. The button below hands us a signed
+    // ID token; the server verifies it (domain + roster lookup) on submit. ---
+    function handleGoogleSignIn(response) {
+        document.getElementById('google_id_token').value = response.credential;
+        googleSignedIn = true;
+
+        // Decode just the payload for a friendly "Signed in as ..." display.
+        // This is NOT trusted for anything — the server independently
+        // verifies the token itself before accepting the submission.
+        try {
+            const payload = JSON.parse(atob(response.credential.split('.')[1]));
+            const label = document.getElementById('signed-in-as');
+            label.textContent = "✔ Signed in as " + payload.email;
+            label.style.display = 'block';
+        } catch (e) { /* display-only, safe to ignore */ }
+
+        if (remaining > 0) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = "Submit Attendance";
+        }
+    }
+
+    if (GOOGLE_CLIENT_ID) {
+        window.onload = function () {
+            google.accounts.id.initialize({
+                client_id: GOOGLE_CLIENT_ID,
+                callback: handleGoogleSignIn
+            });
+            google.accounts.id.renderButton(
+                document.getElementById('g_id_signin'),
+                { theme: 'outline', size: 'large', width: 300 }
+            );
+        };
+    } else {
+        document.getElementById('google-signin-wrap').innerHTML =
+            "<p style='color:#dc2626;'>Google Sign-In isn't configured. Contact your instructor.</p>";
+    }
+
+    // --- Device fingerprint: a persistent random ID stored in this browser ---
+    // The old approach hashed device characteristics (user agent, screen
+    // size, timezone, language) — but two DIFFERENT physical devices of the
+    // same phone model, OS version, browser, and locale produce the exact
+    // same hash, which caused false "already marked" rejections for
+    // different students with similar phones. A randomly generated ID,
+    // created once and persisted in this browser, is actually unique per
+    // device instead of just typically unique.
+    function buildFingerprint() {
+        const STORAGE_KEY = "attendance_device_id";
+        try {
+            let id = localStorage.getItem(STORAGE_KEY);
+            if (!id) {
+                id = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2)));
+                localStorage.setItem(STORAGE_KEY, id);
+            }
+            return "fp_" + id;
+        } catch (e) {
+            // Private browsing / storage disabled — fall back to a
+            // per-page-load random value rather than failing outright.
+            // This means dedup won't persist across reloads for this
+            // student specifically, which is an acceptable trade-off
+            // versus blocking a legitimate submission entirely.
+            return "fp_" + Date.now() + "-" + Math.random().toString(36).slice(2);
+        }
+    }
+
+    document.getElementById('fingerprint').value = buildFingerprint();
+
+    // --- Submit via fetch so we can show the result without a full reload ---
+    document.getElementById('attendance-form').addEventListener('submit', async function (e) {
+        e.preventDefault();
+
+        if (!googleSignedIn) {
+            document.getElementById('result').innerHTML =
+                "<p style='color:#dc2626;'>❌ Please sign in with your Google account first.</p>";
+            return;
+        }
+
+        submitBtn.disabled = true;
+
+        const formData = new FormData(this);
+
+        try {
+            const res = await fetch('/submit', {
+                method: 'POST',
+                body: formData
+            });
+            const html = await res.text();
+            document.getElementById('result').innerHTML = html;
+        } catch (err) {
+            document.getElementById('result').innerHTML =
+                "<p style='color:#dc2626;'>❌ Network error — please try again.</p>";
+            submitBtn.disabled = false;
+        }
+    });
+</script>
+
+</body>
+</html>

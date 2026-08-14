@@ -1,0 +1,7 @@
+Flask==3.0.3
+Flask-Session==0.8.0
+gspread==6.1.2
+google-auth==2.32.0
+qrcode==7.4.2
+Pillow==10.4.0
+waitress==3.0.0
