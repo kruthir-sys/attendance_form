@@ -840,9 +840,12 @@ def duplicate_response():
 # =========================
 # 📊 STATS (date + session breakdown)
 # =========================
-def build_day_stats(date_str):
+def build_day_stats(date_str, session_filter=None):
     """Shared by /stats (HTML view) and /stats/download (CSV export) so
-    both always report the exact same numbers."""
+    both always report the exact same numbers. session_filter, if given,
+    restricts attendees/total to that one session — session_stats always
+    covers all sessions for the day regardless, so the summary table stays
+    a full breakdown even when a single session is selected."""
     if time.time() - student_map_last_fetch > STUDENT_MAP_CACHE_TTL:
         refresh_student_map()
 
@@ -855,7 +858,6 @@ def build_day_stats(date_str):
         sheet_date = str(row.get("Date", "")).strip()
 
         if sheet_date == date_str:
-            total_attended += 1
             student_id = str(row.get("Student ID", "")).strip()
             info = student_map_cache.get(student_id, {})
             session_val = str(row.get("Session", "")).strip()
@@ -863,6 +865,10 @@ def build_day_stats(date_str):
             stat = session_stats.setdefault(session_val, {"total": 0})
             stat["total"] += 1
 
+            if session_filter and session_val != session_filter:
+                continue
+
+            total_attended += 1
             attendees.append({
                 "student_id": student_id,
                 "name": info.get("name") or "Unknown",
@@ -883,23 +889,27 @@ def stats():
 
     today_date = now_ist().strftime("%Y-%m-%d")
     date_selected = request.values.get("date", today_date)
+    session_selected = request.values.get("session", "").strip()
 
-    total_attended, attendees, session_stats = build_day_stats(date_selected)
+    total_attended, attendees, session_stats = build_day_stats(date_selected, session_selected or None)
 
     return render_template(
         "stats.html",
         attended=total_attended,
         date=date_selected,
         attendees=attendees,
-        session_stats=session_stats
+        session_stats=session_stats,
+        session_options=SESSION_OPTIONS,
+        session_selected=session_selected
     )
 
 
 @app.route("/stats/download")
 def download_stats_csv():
     date_str = request.args.get("date") or now_ist().strftime("%Y-%m-%d")
+    session_filter = request.args.get("session", "").strip() or None
 
-    _, attendees, _ = build_day_stats(date_str)
+    _, attendees, _ = build_day_stats(date_str, session_filter)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
