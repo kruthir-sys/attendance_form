@@ -97,21 +97,99 @@ WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME", "Sheet1")
 SESSION_OPTIONS = [
     s.strip() for s in os.environ.get(
         "SESSION_OPTIONS",
-        "S1/T1(RAUNAK), S2/T2(ABHISEK), S3/T3(SANDESH)"
+        "L1/P1(RAUNAK), L2/P2(ABHISEK), L3/P3(SANDESH)"
     ).split(",") if s.strip()
 ]
 
 def session_category(session_name):
     """
-    Each dropdown option (S1/T1, S2/T2, ...) is now a single combined
+    Each dropdown option (L1/P1, L2/P2, ...) is now a single combined
     slot — there's no separate "session" vs "tutorial" concept anymore, so
     every option maps to the same category. This is what the
     duplicate-prevention logic keys on: a student can submit at most ONE
-    of these options per day, regardless of which one (S1/T1 vs S3/T3)
+    of these options per day, regardless of which one (L1/P1 vs L3/P3)
     they pick — it's the single daily slot that's limited, not the exact
     option chosen.
     """
     return "attendance"
+
+# =========================
+# 🗓️ SESSION SCHEDULE (weekday + time gating)
+# =========================
+# Which SESSION_OPTIONS are shown/accepted depends on the current IST
+# weekday and time. Configure this with the SESSION_SCHEDULE_JSON env var,
+# or just edit SESSION_SCHEDULE below — no other code needs to change.
+#
+# Format: {"<exact session option>": {"days": ["Mon", "Wed", ...], "start": "HH:MM", "end": "HH:MM"}}
+# - "days" uses 3-letter names: Mon, Tue, Wed, Thu, Fri, Sat, Sun
+# - "start"/"end" are 24h IST clock times — the actual class start/end.
+#   SESSION_BUFFER_MINUTES (below) is applied automatically on both sides,
+#   so leave these as the real class times, not the padded window.
+# - A session name with NO entry here is always available (unrestricted) —
+#   so you only need to add entries for the ones you actually want to gate.
+#
+# NOTE: Abhisek (3-4pm) and Sandesh (4-5pm) are back-to-back, so their
+# buffered windows would normally overlap by 20 min around 4:00 — Abhisek
+# has no end-buffer and Sandesh has no start-buffer here so the cutover at
+# 4:00 PM stays clean (only one of them ever shows at a time).
+_DAY_NAME_TO_INDEX = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+
+# How many minutes early/late a student can still mark attendance, relative
+# to each session's configured start/end (e.g. 10 = window opens 10 min
+# before class and stays open 10 min after). Applies to every entry below
+# unless a session sets its own "start_buffer"/"end_buffer" override.
+SESSION_BUFFER_MINUTES = int(os.environ.get("SESSION_BUFFER_MINUTES", "10"))
+
+_session_schedule_env = os.environ.get("SESSION_SCHEDULE_JSON")
+if _session_schedule_env:
+    import json as _json
+    SESSION_SCHEDULE = _json.loads(_session_schedule_env)
+else:
+    SESSION_SCHEDULE = {
+        "L1/P1(RAUNAK)":  {"days": ["Mon", "Wed", "Fri"], "start": "12:00", "end": "13:00"},
+        "L2/P2(ABHISEK)": {"days": ["Tue", "Thu", "Fri"], "start": "15:00", "end": "16:00", "end_buffer": 0},
+        "L3/P3(SANDESH)": {"days": ["Tue", "Thu", "Fri"], "start": "16:00", "end": "17:00", "start_buffer": 0},
+    }
+
+
+def _time_str_to_minutes(hhmm):
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def is_session_available(session_name, dt):
+    """True if `session_name` should be selectable at IST datetime `dt`,
+    including SESSION_BUFFER_MINUTES of slack before/after the configured
+    start/end (or a per-session "start_buffer"/"end_buffer" override, e.g.
+    for back-to-back classes that shouldn't overlap). Sessions with no
+    schedule entry are always available."""
+    rule = SESSION_SCHEDULE.get(session_name)
+    if not rule:
+        return True
+
+    allowed_days = {_DAY_NAME_TO_INDEX[d] for d in rule.get("days", [])}
+    if allowed_days and dt.weekday() not in allowed_days:
+        return False
+
+    start = rule.get("start")
+    end = rule.get("end")
+    if start and end:
+        now_minutes = dt.hour * 60 + dt.minute
+        start_buffer = rule.get("start_buffer", SESSION_BUFFER_MINUTES)
+        end_buffer = rule.get("end_buffer", SESSION_BUFFER_MINUTES)
+        window_start = _time_str_to_minutes(start) - start_buffer
+        window_end = _time_str_to_minutes(end) + end_buffer
+        if not (window_start <= now_minutes < window_end):
+            return False
+
+    return True
+
+
+def get_available_sessions(dt=None):
+    """SESSION_OPTIONS filtered down to whatever's currently in its
+    scheduled weekday/time window (or unrestricted)."""
+    dt = dt or now_ist()
+    return [s for s in SESSION_OPTIONS if is_session_available(s, dt)]
 
 sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
 STUDENT_MAP_SHEET = client.open(SPREADSHEET_NAME).worksheet("StudentMap")
@@ -758,10 +836,14 @@ def mark():
     elapsed = time.time() - session.get("mark_started", time.time())
     remaining_seconds = max(0, int(ANSWER_WINDOW_SECONDS - elapsed))
 
+    available_sessions = get_available_sessions()
+    if not available_sessions:
+        return "<h2>⏱ No attendance session is open right now. Please check back during your class slot.</h2>"
+
     return render_template("mark.html",
         token=token,
         remaining_seconds=remaining_seconds,
-        session_options=SESSION_OPTIONS,
+        session_options=available_sessions,
         google_client_id=GOOGLE_OAUTH_CLIENT_ID,
         google_form_url=GOOGLE_FORM_URL
     )
@@ -793,6 +875,13 @@ def submit():
 
     if session_choice not in SESSION_OPTIONS:
         return "<h2>❌ Please select a valid session.</h2>"
+
+    # Re-check the weekday/time window here too — the dropdown on /mark
+    # already hides out-of-window options, but that's client-side only.
+    # Without this check a student could still POST an old `session` value
+    # straight to /submit outside its allowed window.
+    if not is_session_available(session_choice, now_ist()):
+        return "<h2>❌ That session is not open right now.</h2>"
 
     category = session_category(session_choice)
 
