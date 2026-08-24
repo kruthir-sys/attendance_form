@@ -138,7 +138,7 @@ _DAY_NAME_TO_INDEX = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5
 # to each session's configured start/end (e.g. 10 = window opens 10 min
 # before class and stays open 10 min after). Applies to every entry below
 # unless a session sets its own "start_buffer"/"end_buffer" override.
-SESSION_BUFFER_MINUTES = int(os.environ.get("SESSION_BUFFER_MINUTES", "15"))
+SESSION_BUFFER_MINUTES = int(os.environ.get("SESSION_BUFFER_MINUTES", "10"))
 
 _session_schedule_env = os.environ.get("SESSION_SCHEDULE_JSON")
 if _session_schedule_env:
@@ -613,7 +613,6 @@ def generate_token():
 
 BASE_URL = os.environ.get("APP_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "http://10.70.112.87:8000"
 TOKEN_TTL_SECONDS = 12   # how long the QR itself stays scannable — keeps forwarding hard
-ANSWER_WINDOW_SECONDS = 360  # once a student has scanned in, how long they get to submit
 
 # The real Google Form URL. Kept server-side only and injected into
 # mark.html as an iframe src ONLY after a request has already passed the
@@ -789,9 +788,9 @@ def validate_and_track_token(token, allow_start=True):
     - First time this exact token is seen in a session, it must pass the
       SHORT scan-freshness check (TOKEN_TTL_SECONDS) — this is what makes
       forwarding a link/photo impractical.
-    - Once accepted, the session gets its own longer ANSWER_WINDOW_SECONDS
-      clock, independent of the raw token's age, so filling in the student
-      ID and submitting doesn't race the scan window.
+    - Once accepted, the session's mark_token is remembered with no
+      additional time limit — a student can take as long as they need to
+      fill in the session choice and complete the quiz.
 
     allow_start=False (used by /submit) means this token must have ALREADY
     been validated via /mark in this same session — it can't be used to
@@ -803,9 +802,6 @@ def validate_and_track_token(token, allow_start=True):
         return "invalid"
 
     if session.get("mark_token") == token:
-        started = session.get("mark_started", 0)
-        if time.time() - started > ANSWER_WINDOW_SECONDS:
-            return "expired"
         return "ok"
 
     if not allow_start:
@@ -835,9 +831,6 @@ def mark():
     if status == "expired":
         return "<h2>⏱ QR Expired — please rescan the code on screen.</h2>"
 
-    elapsed = time.time() - session.get("mark_started", time.time())
-    remaining_seconds = max(0, int(ANSWER_WINDOW_SECONDS - elapsed))
-
     available_sessions = get_available_sessions()
     if not available_sessions:
         return "<h2>⏱ No attendance session is open right now. Please check back during your class slot.</h2>"
@@ -849,7 +842,6 @@ def mark():
     # until a student has actually completed the required first step.
     return render_template("mark.html",
         token=token,
-        remaining_seconds=remaining_seconds,
         session_options=available_sessions,
         google_client_id=GOOGLE_OAUTH_CLIENT_ID
     )
@@ -926,7 +918,7 @@ def submit():
         fingerprint_set.add(fp_key)
     fingerprint_write_queue.put(fp_key)  # persisted in the background, not here
 
-    return '<h2 class="success">✅ Attendance marked. but complete your quiz below!</h2>'
+    return '<h2 class="success">✅ Attendance marked. Thank you!</h2>'
 
 
 @app.route("/form-embed", methods=["GET"])
