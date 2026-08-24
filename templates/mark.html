@@ -28,12 +28,6 @@
         margin-top: 0;
         color: #1f2937;
     }
-    #timer {
-        font-size: 0.95rem;
-        color: #dc2626;
-        font-weight: 600;
-        margin-bottom: 18px;
-    }
     input[type="text"] {
         width: 100%;
         padding: 12px;
@@ -79,7 +73,6 @@
 
 <div class="card">
     <h2>✅ Mark Attendance</h2>
-    <div id="timer">Time remaining: <span id="seconds">{{ remaining_seconds }}</span>s</div>
 
     <form id="attendance-form">
         <div id="google-signin-wrap" style="margin-bottom:16px;">
@@ -113,22 +106,7 @@
     const GOOGLE_CLIENT_ID = "{{ google_client_id }}";
     let googleSignedIn = false;
 
-    // --- Countdown, mirrors the server-side ANSWER_WINDOW_SECONDS check ---
-    let remaining = parseInt(document.getElementById('seconds').textContent, 10) || 0;
-    const secondsEl = document.getElementById('seconds');
     const submitBtn = document.getElementById('submit-btn');
-
-    const countdown = setInterval(() => {
-        remaining -= 1;
-        if (remaining <= 0) {
-            remaining = 0;
-            clearInterval(countdown);
-            submitBtn.disabled = true;
-            document.getElementById('result').innerHTML =
-                "<p style='color:#dc2626;'>⏱ Time's up. Please rescan the QR code.</p>";
-        }
-        secondsEl.textContent = remaining;
-    }, 1000);
 
     // --- Google Sign-In: this is what actually identifies the student now,
     // not a freely-typed Student ID. The button below hands us a signed
@@ -149,10 +127,8 @@
 
         // Reveal the "Submit Attendance" button now — the question form
         // itself only appears after a successful /submit, further down.
-        if (remaining > 0) {
-            submitBtn.disabled = false;
-            submitBtn.textContent = "Submit Attendance";
-        }
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Submit Attendance";
     }
 
     if (GOOGLE_CLIENT_ID) {
