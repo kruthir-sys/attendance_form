@@ -138,7 +138,7 @@ _DAY_NAME_TO_INDEX = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5
 # to each session's configured start/end (e.g. 10 = window opens 10 min
 # before class and stays open 10 min after). Applies to every entry below
 # unless a session sets its own "start_buffer"/"end_buffer" override.
-SESSION_BUFFER_MINUTES = int(os.environ.get("SESSION_BUFFER_MINUTES", "10"))
+SESSION_BUFFER_MINUTES = int(os.environ.get("SESSION_BUFFER_MINUTES", "15"))
 
 _session_schedule_env = os.environ.get("SESSION_SCHEDULE_JSON")
 if _session_schedule_env:
