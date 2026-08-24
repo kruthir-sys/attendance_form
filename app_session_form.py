@@ -621,7 +621,9 @@ ANSWER_WINDOW_SECONDS = 360  # once a student has scanned in, how long they get 
 # sits in a static page a student could view-source or bookmark before
 # scanning. (Anyone deliberately opening devtools on an already-scanned
 # page can still find it in the DOM — that's an accepted, unavoidable
-# limit of anything rendered client-side.)
+# limit of anything rendered client-side. See the mark() route below for
+# the additional per-scan token now appended to close the "leaked link
+# works for anyone" gap.)
 GOOGLE_FORM_URL = os.environ.get("GOOGLE_FORM_URL", "").strip()
 
 # =========================
@@ -840,12 +842,16 @@ def mark():
     if not available_sessions:
         return "<h2>⏱ No attendance session is open right now. Please check back during your class slot.</h2>"
 
+    # google_form_url is deliberately NOT passed here. Students must mark
+    # attendance via /submit FIRST — the Form URL is only ever released by
+    # /form-embed below, and only after this session's attendance is
+    # confirmed marked. This keeps the raw Form link out of the page's DOM
+    # until a student has actually completed the required first step.
     return render_template("mark.html",
         token=token,
         remaining_seconds=remaining_seconds,
         session_options=available_sessions,
-        google_client_id=GOOGLE_OAUTH_CLIENT_ID,
-        google_form_url=GOOGLE_FORM_URL
+        google_client_id=GOOGLE_OAUTH_CLIENT_ID
     )
 
 # =========================
@@ -920,7 +926,27 @@ def submit():
         fingerprint_set.add(fp_key)
     fingerprint_write_queue.put(fp_key)  # persisted in the background, not here
 
-    return "<h2>✅ Attendance marked. Thank you!</h2>"
+    return '<h2 class="success">✅ Attendance marked. Thank you!</h2>'
+
+
+@app.route("/form-embed", methods=["GET"])
+def form_embed():
+    """Releases the real Google Form URL — and only this endpoint does —
+    so it never sits in the page's DOM until a student has actually
+    completed /submit successfully in THIS session. Relies on the same
+    session["attendance_done_sessions"] list /submit already maintains,
+    so there's no new state to keep in sync."""
+    if not GOOGLE_FORM_URL:
+        return {"error": "not_configured"}, 404
+
+    today = now_ist().strftime("%Y-%m-%d")
+    done_list = session.get("attendance_done_sessions", [])
+    marked_today = any(marker.endswith(f"_{today}") for marker in done_list)
+
+    if not marked_today:
+        return {"error": "attendance_not_marked"}, 403
+
+    return {"url": GOOGLE_FORM_URL}
 
 
 def duplicate_response():
