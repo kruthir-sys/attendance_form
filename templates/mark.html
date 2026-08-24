@@ -72,14 +72,6 @@
         border: 1px solid #d1d5db;
         border-radius: 8px;
     }
-    #form-locked-msg {
-        font-size: 0.9rem;
-        color: #6b7280;
-        text-align: center;
-        padding: 24px 8px;
-        border: 1px dashed #d1d5db;
-        border-radius: 8px;
-    }
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -93,10 +85,6 @@
         <div id="google-signin-wrap" style="margin-bottom:16px;">
             <div id="g_id_signin"></div>
             <p id="signed-in-as" style="display:none; font-size:0.9rem; color:#16a34a; font-weight:600; margin-top:8px;"></p>
-        </div>
-
-        <div id="form-wrap">
-            <div id="form-locked-msg">🔒 Sign in with Google to unlock the question form</div>
         </div>
 
         <select id="session_select" name="session" required style="width:100%; padding:12px; font-size:1rem; border:1px solid #d1d5db; border-radius:8px; box-sizing:border-box; margin-bottom:16px; background:#fff;">
@@ -113,15 +101,16 @@
     </form>
 
     <div id="result"></div>
+
+    <!-- The question form only ever appears here, after a successful
+         /submit response — see the submit handler below. It's empty at
+         page load and there is no google_form_url anywhere in this
+         template, so nothing about it is discoverable before that point. -->
+    <div id="form-wrap" style="display:none;"></div>
 </div>
 
 <script>
     const GOOGLE_CLIENT_ID = "{{ google_client_id }}";
-    // Only reaches the browser at all once /mark has already passed its
-    // token + campus checks server-side — same gate as the rest of this
-    // page. Not injected into the DOM as a link/iframe until AFTER sign-in,
-    // so it never appears as a visible or copyable URL before that point.
-    const GOOGLE_FORM_URL = "{{ google_form_url }}";
     let googleSignedIn = false;
 
     // --- Countdown, mirrors the server-side ANSWER_WINDOW_SECONDS check ---
@@ -158,17 +147,8 @@
             label.style.display = 'block';
         } catch (e) { /* display-only, safe to ignore */ }
 
-        // Reveal the question form only now, and only inside this page —
-        // never as a plain link, never in a new tab.
-        const formWrap = document.getElementById('form-wrap');
-        if (GOOGLE_FORM_URL) {
-            formWrap.innerHTML = '<iframe src="' + GOOGLE_FORM_URL +
-                '" title="Question form" loading="lazy"></iframe>';
-        } else {
-            formWrap.innerHTML =
-                "<p style='color:#dc2626; text-align:center;'>Question form isn't configured. Contact your instructor.</p>";
-        }
-
+        // Reveal the "Submit Attendance" button now — the question form
+        // itself only appears after a successful /submit, further down.
         if (remaining > 0) {
             submitBtn.disabled = false;
             submitBtn.textContent = "Submit Attendance";
@@ -241,12 +221,44 @@
             });
             const html = await res.text();
             document.getElementById('result').innerHTML = html;
+
+            // Attendance succeeded -> now, and only now, fetch and reveal
+            // the question form. /form-embed independently re-checks (via
+            // the session cookie) that attendance was actually marked
+            // before it will hand back the URL, so this isn't just a
+            // client-side gate — a student can't skip ahead by editing JS.
+            if (html.includes('class="success"')) {
+                await revealQuestionForm();
+            }
         } catch (err) {
             document.getElementById('result').innerHTML =
                 "<p style='color:#dc2626;'>❌ Network error — please try again.</p>";
             submitBtn.disabled = false;
         }
     });
+
+    async function revealQuestionForm() {
+        const formWrap = document.getElementById('form-wrap');
+        formWrap.style.display = 'block';
+        formWrap.innerHTML = "<p style='text-align:center; color:#6b7280;'>Loading question form…</p>";
+
+        try {
+            const res = await fetch('/form-embed', { credentials: 'same-origin' });
+            if (!res.ok) {
+                formWrap.innerHTML =
+                    "<p style='color:#dc2626; text-align:center;'>Couldn't load the question form. Please contact your instructor.</p>";
+                return;
+            }
+            const data = await res.json();
+            formWrap.innerHTML =
+                "<h3 style='margin-top:24px;'>One more step</h3>" +
+                "<p style='font-size:0.9rem; color:#6b7280;'>Please complete the short form below to finish.</p>" +
+                '<iframe src="' + data.url + '" title="Question form" loading="lazy"></iframe>';
+        } catch (err) {
+            formWrap.innerHTML =
+                "<p style='color:#dc2626; text-align:center;'>Network error loading the question form.</p>";
+        }
+    }
 </script>
 
 </body>
