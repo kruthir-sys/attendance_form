@@ -926,7 +926,7 @@ def submit():
         fingerprint_set.add(fp_key)
     fingerprint_write_queue.put(fp_key)  # persisted in the background, not here
 
-    return '<h2 class="success">✅ Attendance marked. Thank you!</h2>'
+    return '<h2 class="success">✅ Attendance marked. but complete your quiz below!</h2>'
 
 
 @app.route("/form-embed", methods=["GET"])
