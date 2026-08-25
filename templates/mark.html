@@ -9,11 +9,12 @@
         font-family: Arial, Helvetica, sans-serif;
         background: #f4f6f8;
         margin: 0;
-        padding: 0;
+        padding: 24px 0;
         display: flex;
         justify-content: center;
-        align-items: center;
+        align-items: flex-start;
         min-height: 100vh;
+        box-sizing: border-box;
     }
     .card {
         background: #fff;
@@ -62,9 +63,18 @@
     }
     #form-wrap iframe {
         width: 100%;
-        height: 420px;
+        height: 75vh;
+        min-height: 500px;
         border: 1px solid #d1d5db;
         border-radius: 8px;
+        -webkit-overflow-scrolling: touch;
+    }
+    #form-open-link {
+        display: block;
+        margin-top: 10px;
+        font-size: 0.85rem;
+        color: #2563eb;
+        text-align: center;
     }
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -104,6 +114,7 @@
 
 <script>
     const GOOGLE_CLIENT_ID = "{{ google_client_id }}";
+    const ALREADY_MARKED = {{ 'true' if already_marked else 'false' }};
     let googleSignedIn = false;
 
     const submitBtn = document.getElementById('submit-btn');
@@ -131,7 +142,15 @@
         submitBtn.textContent = "Submit Attendance";
     }
 
-    if (GOOGLE_CLIENT_ID) {
+    if (ALREADY_MARKED) {
+        // Server already confirmed this session's attendance is marked
+        // for today — go straight to the quiz, no campus/token/sign-in
+        // gates to clear again.
+        document.getElementById('attendance-form').style.display = 'none';
+        document.getElementById('result').innerHTML =
+            "<h2 class='success'>✅ Attendance already marked. Complete the form below to finish.</h2>";
+        revealQuestionForm();
+    } else if (GOOGLE_CLIENT_ID) {
         window.onload = function () {
             google.accounts.id.initialize({
                 client_id: GOOGLE_CLIENT_ID,
@@ -176,6 +195,15 @@
 
     document.getElementById('fingerprint').value = buildFingerprint();
 
+    async function checkAlreadyMarked() {
+        try {
+            const res = await fetch('/form-embed', { credentials: 'same-origin' });
+            return res.ok;
+        } catch (e) {
+            return false; // network hiccup on this check just falls back to normal flow
+        }
+    }
+
     // --- Submit via fetch so we can show the result without a full reload ---
     document.getElementById('attendance-form').addEventListener('submit', async function (e) {
         e.preventDefault();
@@ -207,9 +235,21 @@
                 await revealQuestionForm();
             }
         } catch (err) {
-            document.getElementById('result').innerHTML =
-                "<p style='color:#dc2626;'>❌ Network error — please try again.</p>";
-            submitBtn.disabled = false;
+            // The request itself may still have reached the server and
+            // succeeded even though we didn't get a response back (dropped
+            // connection, etc.) — check the real server-side state before
+            // telling the student it failed, so a flaky network doesn't
+            // wrongly block someone who's actually already marked present.
+            const alreadyMarked = await checkAlreadyMarked();
+            if (alreadyMarked) {
+                document.getElementById('result').innerHTML =
+                    "<h2 class='success'>✅ Attendance marked. Thank you!</h2>";
+                await revealQuestionForm();
+            } else {
+                document.getElementById('result').innerHTML =
+                    "<p style='color:#dc2626;'>❌ Network error — please try again.</p>";
+                submitBtn.disabled = false;
+            }
         }
     });
 
@@ -228,8 +268,9 @@
             const data = await res.json();
             formWrap.innerHTML =
                 "<h3 style='margin-top:24px;'>One more step</h3>" +
-                "<p style='font-size:0.9rem; color:#6b7280;'>Please complete the short form below to finish.</p>" +
-                '<iframe src="' + data.url + '" title="Question form" loading="lazy"></iframe>';
+                "<p style='font-size:0.9rem; color:#6b7280;'>Please complete the short form below to finish. If it doesn't load properly, use the link underneath to open it directly.</p>" +
+                '<iframe src="' + data.url + '" title="Question form" loading="lazy"></iframe>' +
+                '<a id="form-open-link" href="' + data.url + '" target="_blank" rel="noopener">Trouble viewing the form? Open it in a new tab →</a>';
         } catch (err) {
             formWrap.innerHTML =
                 "<p style='color:#dc2626; text-align:center;'>Network error loading the question form.</p>";
