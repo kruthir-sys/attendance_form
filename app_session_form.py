@@ -821,6 +821,26 @@ def validate_and_track_token(token, allow_start=True):
 # =========================
 @app.route("/mark", methods=["GET"])
 def mark():
+    # Checked FIRST, before the campus-network and QR-freshness gates below.
+    # Someone who has already marked attendance today doesn't need to
+    # re-prove they're on campus Wi-Fi or hold a fresh QR token just to
+    # get back to the quiz — those checks exist to gate the ATTENDANCE
+    # step, not repeat access to something already unlocked. Without this,
+    # a refresh after a flaky Wi-Fi moment or a stale token could strand
+    # an already-marked student on an error page with no way back in.
+    today = now_ist().strftime("%Y-%m-%d")
+    already_marked = any(
+        marker.endswith(f"_{today}")
+        for marker in session.get("attendance_done_sessions", [])
+    )
+    if already_marked:
+        return render_template("mark.html",
+            token="",
+            session_options=[],
+            google_client_id=GOOGLE_OAUTH_CLIENT_ID,
+            already_marked=True
+        )
+
     if not is_on_campus_network():
         return "<h2>🚫 Please connect to the classroom Wi-Fi to mark attendance.</h2>"
 
@@ -843,7 +863,8 @@ def mark():
     return render_template("mark.html",
         token=token,
         session_options=available_sessions,
-        google_client_id=GOOGLE_OAUTH_CLIENT_ID
+        google_client_id=GOOGLE_OAUTH_CLIENT_ID,
+        already_marked=False
     )
 
 # =========================
@@ -918,7 +939,7 @@ def submit():
         fingerprint_set.add(fp_key)
     fingerprint_write_queue.put(fp_key)  # persisted in the background, not here
 
-    return '<h2 class="success">✅ Attendance marked. you have a quiz to answer below!</h2>'
+    return '<h2 class="success">✅ Attendance marked. Thank you!</h2>'
 
 
 @app.route("/form-embed", methods=["GET"])
