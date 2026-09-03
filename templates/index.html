@@ -91,7 +91,7 @@
     // displayed image in sync by re-requesting /qr on an interval. A
     // cache-busting query param forces the browser to actually re-fetch
     // instead of reusing a cached image.
-    const REFRESH_MS = 3000;
+    const REFRESH_MS = 5000;
     const img = document.getElementById('qr-image');
 
     function refreshQr() {
