@@ -147,7 +147,7 @@ if _session_schedule_env:
 else:
     SESSION_SCHEDULE = {
         "L1/P1(RAUNAK)":  {"days": ["Mon", "Wed", "Fri"], "start": "10:00", "end": "13:00"},
-        "L2/P2(ABHISEK)": {"days": ["Tue", "Thu", "Fri"], "start": "15:00", "end": "16:00", "end_buffer": 0},
+        "L2/P2(ABHISEK)": {"days": ["Tue", "Thu", "Fri"], "start": "14:30", "end": "16:00", "end_buffer": 0},
         "L3/P3(SANDESH)": {"days": ["Tue", "Thu", "Fri"], "start": "16:00", "end": "17:00", "start_buffer": 0},
     }
 
