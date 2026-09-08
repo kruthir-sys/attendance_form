@@ -76,6 +76,36 @@
         color: #2563eb;
         text-align: center;
     }
+    #form-open-btn {
+        display: block;
+        width: 100%;
+        padding: 14px;
+        font-size: 1rem;
+        font-weight: 600;
+        background: #16a34a;
+        color: #fff;
+        border-radius: 8px;
+        text-decoration: none;
+        box-sizing: border-box;
+        text-align: center;
+    }
+    #show-embed-toggle {
+        display: block;
+        margin-top: 14px;
+        font-size: 0.85rem;
+        color: #6b7280;
+        text-align: center;
+        text-decoration: underline;
+        cursor: pointer;
+        background: none;
+        border: none;
+        width: 100%;
+        padding: 4px;
+    }
+    #embed-container {
+        display: none;
+        margin-top: 12px;
+    }
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -266,11 +296,40 @@
                 return;
             }
             const data = await res.json();
+
+            // Primary path: a plain link opened in a new tab. Embedded
+            // (iframe) Google Forms frequently fail to load images for
+            // students on browsers that block third-party cookies for
+            // framed content (Safari, Chrome Incognito, some Android
+            // browsers) — the form *looks* loaded but questions with
+            // images come up broken, and students often don't notice.
+            // Opening it as a normal top-level page avoids that failure
+            // mode entirely, so this is now the default, prominent action
+            // instead of a small fallback link under an iframe.
             formWrap.innerHTML =
                 "<h3 style='margin-top:24px;'>One more step</h3>" +
-                "<p style='font-size:0.9rem; color:#6b7280;'>Please complete the short form below to finish. If it doesn't load properly, use the link underneath to open it directly.</p>" +
-                '<iframe src="' + data.url + '" title="Question form" loading="lazy"></iframe>' +
-                '<a id="form-open-link" href="' + data.url + '" target="_blank" rel="noopener">Trouble viewing the form? Open it in a new tab →</a>';
+                "<p style='font-size:0.9rem; color:#6b7280;'>Tap below to open the short form and finish up. It opens in a new tab — come back here once you've submitted it.</p>" +
+                '<a id="form-open-btn" href="' + data.url + '" target="_blank" rel="noopener">Open the form ↗</a>' +
+                '<button id="show-embed-toggle" type="button">Prefer to view it here instead?</button>' +
+                '<div id="embed-container"></div>';
+
+            // Embedded view is now opt-in only, and lazy-loaded on
+            // request — students who don't run into the cookie/image
+            // issue can still use it if they'd rather not switch tabs,
+            // but it's no longer the thing everyone sees by default.
+            document.getElementById('show-embed-toggle').addEventListener('click', function () {
+                const container = document.getElementById('embed-container');
+                if (container.style.display === 'block') {
+                    container.style.display = 'none';
+                    this.textContent = 'Prefer to view it here instead?';
+                    return;
+                }
+                container.style.display = 'block';
+                container.innerHTML =
+                    '<iframe src="' + data.url + '" title="Question form" loading="lazy"></iframe>' +
+                    "<p style='font-size:0.8rem; color:#9ca3af; text-align:center; margin-top:6px;'>If images or questions don't appear here, use the button above instead.</p>";
+                this.textContent = 'Hide embedded view';
+            });
         } catch (err) {
             formWrap.innerHTML =
                 "<p style='color:#dc2626; text-align:center;'>Network error loading the question form.</p>";
