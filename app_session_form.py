@@ -116,28 +116,8 @@ def session_category(session_name):
 # =========================
 # 🗓️ SESSION SCHEDULE (weekday + time gating)
 # =========================
-# Which SESSION_OPTIONS are shown/accepted depends on the current IST
-# weekday and time. Configure this with the SESSION_SCHEDULE_JSON env var,
-# or just edit SESSION_SCHEDULE below — no other code needs to change.
-#
-# Format: {"<exact session option>": {"days": ["Mon", "Wed", ...], "start": "HH:MM", "end": "HH:MM"}}
-# - "days" uses 3-letter names: Mon, Tue, Wed, Thu, Fri, Sat, Sun
-# - "start"/"end" are 24h IST clock times — the actual class start/end.
-#   SESSION_BUFFER_MINUTES (below) is applied automatically on both sides,
-#   so leave these as the real class times, not the padded window.
-# - A session name with NO entry here is always available (unrestricted) —
-#   so you only need to add entries for the ones you actually want to gate.
-#
-# NOTE: Abhisek (3-4pm) and Sandesh (4-5pm) are back-to-back, so their
-# buffered windows would normally overlap by 20 min around 4:00 — Abhisek
-# has no end-buffer and Sandesh has no start-buffer here so the cutover at
-# 4:00 PM stays clean (only one of them ever shows at a time).
 _DAY_NAME_TO_INDEX = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
 
-# How many minutes early/late a student can still mark attendance, relative
-# to each session's configured start/end (e.g. 10 = window opens 10 min
-# before class and stays open 10 min after). Applies to every entry below
-# unless a session sets its own "start_buffer"/"end_buffer" override.
 SESSION_BUFFER_MINUTES = int(os.environ.get("SESSION_BUFFER_MINUTES", "10"))
 
 _session_schedule_env = os.environ.get("SESSION_SCHEDULE_JSON")
@@ -158,11 +138,6 @@ def _time_str_to_minutes(hhmm):
 
 
 def is_session_available(session_name, dt):
-    """True if `session_name` should be selectable at IST datetime `dt`,
-    including SESSION_BUFFER_MINUTES of slack before/after the configured
-    start/end (or a per-session "start_buffer"/"end_buffer" override, e.g.
-    for back-to-back classes that shouldn't overlap). Sessions with no
-    schedule entry are always available."""
     rule = SESSION_SCHEDULE.get(session_name)
     if not rule:
         return True
@@ -186,8 +161,6 @@ def is_session_available(session_name, dt):
 
 
 def get_available_sessions(dt=None):
-    """SESSION_OPTIONS filtered down to whatever's currently in its
-    scheduled weekday/time window (or unrestricted)."""
     dt = dt or now_ist()
     return [s for s in SESSION_OPTIONS if is_session_available(s, dt)]
 
@@ -196,6 +169,7 @@ STUDENT_MAP_SHEET = client.open(SPREADSHEET_NAME).worksheet("StudentMap")
 FINGERPRINT_SHEET = client.open(SPREADSHEET_NAME).worksheet(
     os.environ.get("FINGERPRINT_WORKSHEET_NAME", "Fingerprints")
 )
+
 # NOTE: there is no answer/grading step in this version — the question,
 # if any, lives entirely in the embedded Google Form and is graded there,
 # not by this app. CORRECT_ANSWERS_SHEET / QUESTION_SHEET have been removed.
@@ -203,11 +177,6 @@ FINGERPRINT_SHEET = client.open(SPREADSHEET_NAME).worksheet(
 
 
 def sheets_call_with_retry(func, *args, max_retries=5, base_delay=1.5, **kwargs):
-    """
-    Wrap any gspread call with exponential backoff + jitter.
-    Protects bursts of ~200 scans from tripping Google Sheets API rate limits
-    (default quota is per-minute, so a burst upload can otherwise fail outright).
-    """
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
@@ -260,14 +229,6 @@ def load_fingerprint_set():
 
 
 def load_fingerprint_set_from_sheet():
-    """
-    Loads previously-seen device fingerprints from the Fingerprints
-    worksheet. This is the piece that makes device-level duplicate
-    protection survive a restart on hosts with ephemeral local disk (e.g.
-    Render) — the Sheet is the durable source of truth here, the same way
-    it already is for attendance itself. The local file is kept too, purely
-    as a faster warm-cache for local runs; it's fine if it's empty/stale.
-    """
     try:
         values = sheets_call_with_retry(FINGERPRINT_SHEET.get_all_values)
     except Exception as e:
@@ -288,14 +249,6 @@ FP_BATCH_SIZE = 100
 FP_FLUSH_INTERVAL = 15
 
 def fingerprint_writer_loop():
-    """
-    Drains fingerprint_write_queue, writes each key to the local file right
-    away (cheap, fast, fine as a warm-cache), and batches uploads to the
-    Fingerprints sheet the same way attendance rows are batched — every
-    FP_BATCH_SIZE keys or FP_FLUSH_INTERVAL seconds, whichever comes first.
-    This is what makes the "already submitted from this device" check
-    survive a restart on hosts with ephemeral disk.
-    """
     buffer = []
     last_flush = time.time()
 
@@ -330,17 +283,6 @@ def fingerprint_writer_loop():
 # 🔁 CACHE REFRESH (also the source of truth for de-duplication)
 # =========================
 def _parse_records_from_values(all_values):
-    """
-    Manually maps raw sheet values to records by column name, instead of
-    using gspread's get_all_records(). get_all_records() is strict about
-    the header row — a single duplicate header, a blank header cell, or
-    leftover columns from an older sheet schema can make it silently fail
-    to parse or skip rows entirely, which is exactly what causes /stats to
-    undercount without any visible error. This approach only requires
-    "Student ID", "Date", and "Time" to exist in the header row; "Session"
-    is optional so older rows recorded before the session field existed
-    still parse fine (they just show an empty session).
-    """
     if not all_values:
         return []
 
@@ -392,19 +334,10 @@ def _do_cache_refresh():
     logging.info(f"Cache refresh: loaded {len(data)} rows from the Sheet")
 
     with attendance_lock:
-        # merge rather than clobber: anything queued locally but not yet
-        # reflected in the sheet snapshot must stay marked as taken
         attendance_set.update(temp_set)
 
 
 def load_local_log_into_attendance_set():
-    """
-    Rebuilds attendance_set from the local durability log (LOCAL_FILE) too,
-    not just the Sheet. Without this, a restart happening between a
-    successful /submit and that row's next Sheets upload (up to
-    FLUSH_INTERVAL seconds later) would "forget" the submission — the
-    student could then submit again as if for the first time.
-    """
     if not os.path.exists(LOCAL_FILE):
         return
     try:
@@ -424,13 +357,6 @@ def load_local_log_into_attendance_set():
 
 
 def refresh_student_map():
-    """
-    Loads Student ID -> {name, email} from the StudentMap worksheet, plus
-    the reverse email -> Student ID lookup used by Google Sign-In to
-    resolve who's actually submitting. Refreshed on its own TTL (see
-    STUDENT_MAP_CACHE_TTL) since a class roster changes far less often
-    than attendance itself.
-    """
     global student_map_cache, email_to_student_cache, student_map_last_fetch
     try:
         rows = sheets_call_with_retry(STUDENT_MAP_SHEET.get_all_records)
@@ -454,11 +380,6 @@ def refresh_student_map():
 
 
 def verify_google_identity(token_str):
-    """
-    Verifies a Google Sign-In ID token (JWT) and resolves it to a Student
-    ID from the roster. Returns (student_id, email, error_message) — on
-    success error_message is None; on failure student_id/email are None.
-    """
     if not GOOGLE_OAUTH_CLIENT_ID:
         return None, None, "Google Sign-In isn't configured on the server."
 
@@ -504,8 +425,6 @@ def refresh_cache_loop():
         if time.time() - student_map_last_fetch > STUDENT_MAP_CACHE_TTL:
             refresh_student_map()
 
-        # prune fingerprint_set of stale (yesterday-or-older) entries so it
-        # doesn't grow forever, then rewrite the persisted file to match
         today = now_ist().strftime("%Y-%m-%d")
         with fingerprint_lock:
             stale = {k for k in fingerprint_set if not k.endswith(today)}
@@ -526,12 +445,6 @@ def refresh_cache_loop():
 # 📤 BACKGROUND WRITER + BATCH UPLOAD
 # =========================
 def writer_and_flush_loop():
-    """
-    Drains submission_queue, appends to the durability log immediately,
-    and batches uploads to Google Sheets either every BATCH_SIZE rows or
-    every FLUSH_INTERVAL seconds — whichever happens first. This keeps the
-    /submit request path free of disk and network I/O entirely.
-    """
     buffer = []
     last_flush = time.time()
 
@@ -541,7 +454,6 @@ def writer_and_flush_loop():
             row = submission_queue.get(timeout=timeout)
             buffer.append(row)
 
-            # write-through to the local durability log right away (cheap, local disk)
             with open(LOCAL_FILE, "a", newline="") as f:
                 csv.writer(f).writerow(row)
 
@@ -560,10 +472,6 @@ def writer_and_flush_loop():
                     csv.writer(f).writerows(to_upload)
                 logging.info(f"Uploaded {len(to_upload)} rows to Google Sheets")
 
-                # Refresh records_cache/attendance_set right away instead of
-                # waiting for the next scheduled 4-minute refresh — without
-                # this, /stats could lag up to ~4 minutes behind a
-                # submission that already succeeded in the Sheet.
                 try:
                     _do_cache_refresh()
                 except Exception as e:
@@ -571,7 +479,6 @@ def writer_and_flush_loop():
 
             except Exception as e:
                 logging.error(f"Flush error, re-queuing {len(to_upload)} rows: {e}")
-                # put them back so we retry next cycle instead of losing data
                 for r in to_upload:
                     submission_queue.put(r)
 
@@ -583,18 +490,13 @@ def start_background_threads():
     threading.Thread(target=writer_and_flush_loop, daemon=True).start()
     threading.Thread(target=fingerprint_writer_loop, daemon=True).start()
 
-# Populate the dedup cache synchronously once at startup so the very first
-# requests aren't racing an empty attendance_set.
 try:
     _do_cache_refresh()
 except Exception as e:
     logging.error(f"Initial cache load failed: {e}")
 
-# Also merge in anything durably logged locally but not yet confirmed
-# uploaded — closes the restart-forgets-a-pending-row gap.
 load_local_log_into_attendance_set()
 
-# Restore fingerprint_set so device-level dedup survives a restart too.
 load_fingerprint_set()
 load_fingerprint_set_from_sheet()
 
@@ -614,60 +516,21 @@ def generate_token():
 BASE_URL = os.environ.get("APP_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "http://10.70.112.87:8000"
 TOKEN_TTL_SECONDS = 12   # how long the QR itself stays scannable — keeps forwarding hard
 
-# The real Google Form URL. Kept server-side only and injected into
-# mark.html as an iframe src ONLY after a request has already passed the
-# same token/campus checks /mark itself enforces — so the raw link never
-# sits in a static page a student could view-source or bookmark before
-# scanning. (Anyone deliberately opening devtools on an already-scanned
-# page can still find it in the DOM — that's an accepted, unavoidable
-# limit of anything rendered client-side. See the mark() route below for
-# the additional per-scan token now appended to close the "leaked link
-# works for anyone" gap.)
 GOOGLE_FORM_URL = os.environ.get("GOOGLE_FORM_URL", "").strip()
 
 # =========================
 # 🔐 GOOGLE SIGN-IN (identity verification)
 # =========================
-# Students authenticate with their university Google account instead of
-# freely typing a Student ID. This closes two problems that a client-side
-# device fingerprint can never fully close: (1) the same person submitting
-# from multiple browsers/incognito on one phone, since each of those wipes
-# any client-stored fingerprint, and (2) someone typing in a Student ID
-# that isn't their own.
-#
-# GOOGLE_OAUTH_CLIENT_ID: create this in Google Cloud Console → APIs &
-# Services → Credentials → Create Credentials → OAuth client ID → type
-# "Web application" → add your app's URL under Authorized JavaScript
-# origins (e.g. https://your-app.onrender.com). This is a DIFFERENT
-# credential from the service-account credentials.json used for Sheets.
-#
-# ALLOWED_EMAIL_DOMAIN: e.g. "university.edu" — only Google accounts on
-# this domain are accepted. Leave unset to allow any Google account
-# (not recommended for real use).
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 ALLOWED_EMAIL_DOMAIN = os.environ.get("ALLOWED_EMAIL_DOMAIN", "").strip().lower()
 
 # =========================
 # 🌐 CAMPUS NETWORK RESTRICTION
 # =========================
-# Comma-separated list of IPv4 CIDR blocks allowed to reach /mark and
-# /submit — e.g. "10.70.16.0/22,192.168.1.0/24". Leave the env var unset
-# (default "") to disable this check entirely, which is useful for local
-# testing before you know your campus Wi-Fi's actual subnet.
-#
-# HOW TO FIND YOUR CAMPUS SUBNET: connect a laptop to the same classroom
-# Wi-Fi students use, then run `ipconfig` (Windows) and look at the IPv4
-# Address + Subnet Mask. E.g. IP 10.70.16.159 with mask 255.255.252.0 is
-# CIDR 10.70.16.0/22.
 CAMPUS_IP_RANGES = [
     r.strip() for r in os.environ.get("CAMPUS_IP_RANGES", "").split(",") if r.strip()
 ]
 
-# Set to True only if this app sits behind a reverse proxy (e.g. nginx, or
-# Render's own proxy) that sets X-Forwarded-For — otherwise every request
-# would appear to come from the proxy's own IP and the campus check would
-# block everyone. Render sets a RENDER env var automatically, so this
-# defaults to True there and False for local/manual runs.
 _default_trust_proxy = "true" if os.environ.get("RENDER") else "false"
 TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", _default_trust_proxy).lower() == "true"
 
@@ -688,8 +551,6 @@ def get_client_ip():
 
 
 def is_on_campus_network():
-    """True if the campus check is disabled, or the requester's IP falls
-    inside one of the configured CIDR blocks."""
     if not _campus_networks:
         return True
     try:
@@ -711,7 +572,6 @@ def make_session_permanent():
 # 🏠 HOME
 # =========================
 def require_admin():
-    """Returns a 401 Response if not authenticated as admin, else None."""
     auth = request.authorization
     if not auth or auth.password != os.environ.get("ADMIN_PASSWORD", "admin123"):
         return Response(
@@ -723,9 +583,6 @@ def require_admin():
 
 @app.route("/healthz")
 def healthz():
-    """Cheap, no-auth endpoint for uptime pingers (e.g. UptimeRobot, cron-job.org)
-    to hit every ~10 minutes on Render's free tier, reducing how often the
-    instance spins down from inactivity. Doesn't touch Sheets or sessions."""
     return "OK", 200
 
 
@@ -744,12 +601,6 @@ def qr():
     token = generate_token()
     qr_data = f"{BASE_URL}/mark?token={token}"
 
-    # High error correction (~30% damage tolerance, vs the ~15% default)
-    # plus a larger box_size means students farther from the screen, at an
-    # angle, or with a lower-quality camera are far less likely to produce
-    # a misread that lands on "Invalid QR" instead of a clean scan. Token
-    # data is short, so there's plenty of headroom to use the highest
-    # correction level without the pattern becoming denser/harder to read.
     qr_maker = qrcode.QRCode(
         error_correction=qrcode.constants.ERROR_CORRECT_H,
         box_size=14,
@@ -765,12 +616,6 @@ def qr():
     return send_file(buf, mimetype="image/png")
 
 def check_token(token):
-    """
-    Returns "valid", "expired", or "invalid". Shared by /mark and /submit so
-    the TTL is enforced end-to-end, not just at initial page load — a token
-    that was fine when the form loaded can still expire before someone gets
-    around to submitting it (which is exactly what makes forwarding hard).
-    """
     if not token:
         return "invalid"
     try:
@@ -783,21 +628,6 @@ def check_token(token):
 
 
 def validate_and_track_token(token, allow_start=True):
-    """
-    Two-stage check:
-    - First time this exact token is seen in a session, it must pass the
-      SHORT scan-freshness check (TOKEN_TTL_SECONDS) — this is what makes
-      forwarding a link/photo impractical.
-    - Once accepted, the session's mark_token is remembered with no
-      additional time limit — a student can take as long as they need to
-      fill in the session choice and complete the quiz.
-
-    allow_start=False (used by /submit) means this token must have ALREADY
-    been validated via /mark in this same session — it can't be used to
-    start a fresh window by POSTing directly to /submit.
-
-    Returns "ok", "invalid", or "expired".
-    """
     if not token:
         return "invalid"
 
@@ -817,17 +647,10 @@ def validate_and_track_token(token, allow_start=True):
 
 
 # =========================
-# 📝 MARK (direct student-ID entry — no session/lab picker, no question)
+# 📝 MARK
 # =========================
 @app.route("/mark", methods=["GET"])
 def mark():
-    # Checked FIRST, before the campus-network and QR-freshness gates below.
-    # Someone who has already marked attendance today doesn't need to
-    # re-prove they're on campus Wi-Fi or hold a fresh QR token just to
-    # get back to the quiz — those checks exist to gate the ATTENDANCE
-    # step, not repeat access to something already unlocked. Without this,
-    # a refresh after a flaky Wi-Fi moment or a stale token could strand
-    # an already-marked student on an error page with no way back in.
     today = now_ist().strftime("%Y-%m-%d")
     already_marked = any(
         marker.endswith(f"_{today}")
@@ -855,11 +678,6 @@ def mark():
     if not available_sessions:
         return "<h2>⏱ No attendance session is open right now. Please check back during your class slot.</h2>"
 
-    # google_form_url is deliberately NOT passed here. Students must mark
-    # attendance via /submit FIRST — the Form URL is only ever released by
-    # /form-embed below, and only after this session's attendance is
-    # confirmed marked. This keeps the raw Form link out of the page's DOM
-    # until a student has actually completed the required first step.
     return render_template("mark.html",
         token=token,
         session_options=available_sessions,
@@ -868,7 +686,7 @@ def mark():
     )
 
 # =========================
-# ✅ SUBMIT (no disk/network I/O in the request path)
+# ✅ SUBMIT
 # =========================
 @app.route("/submit", methods=["POST"])
 def submit():
@@ -895,23 +713,13 @@ def submit():
     if session_choice not in SESSION_OPTIONS:
         return "<h2>❌ Please select a valid session.</h2>"
 
-    # Re-check the weekday/time window here too — the dropdown on /mark
-    # already hides out-of-window options, but that's client-side only.
-    # Without this check a student could still POST an old `session` value
-    # straight to /submit outside its allowed window.
     if not is_session_available(session_choice, now_ist()):
         return "<h2>❌ That session is not open right now.</h2>"
 
     category = session_category(session_choice)
 
-    # Keying by category (not the exact session) means a student can
-    # legitimately submit once per day for ANY one of the S/T options,
-    # but not for two different ones on the same day.
     fp_key = f"{fingerprint}_{category}_{today}"
 
-    # Check-only (no mutation yet) — a device that's already used its slot
-    # for this category/day gets rejected here without anything further
-    # happening.
     with fingerprint_lock:
         if fp_key in fingerprint_set:
             return "<h2>❌ Attendance already marked from this device today</h2>"
@@ -923,7 +731,6 @@ def submit():
 
     row = [student_id, today, now, session_choice]
 
-    # single fast in-memory lock: check-and-mark is atomic, no disk reads
     with attendance_lock:
         if (student_id, today, category) in attendance_set:
             return duplicate_response()
@@ -933,8 +740,6 @@ def submit():
     session["attendance_done_sessions"] = done_list
     submission_queue.put(row)   # background thread handles disk + Sheets
 
-    # Attendance has now been recorded (queued), so only now mark the
-    # fingerprint as used and persist it.
     with fingerprint_lock:
         fingerprint_set.add(fp_key)
     fingerprint_write_queue.put(fp_key)  # persisted in the background, not here
@@ -946,9 +751,7 @@ def submit():
 def form_embed():
     """Releases the real Google Form URL — and only this endpoint does —
     so it never sits in the page's DOM until a student has actually
-    completed /submit successfully in THIS session. Relies on the same
-    session["attendance_done_sessions"] list /submit already maintains,
-    so there's no new state to keep in sync."""
+    completed /submit successfully in THIS session."""
     if not GOOGLE_FORM_URL:
         return {"error": "not_configured"}, 404
 
@@ -966,20 +769,14 @@ def duplicate_response():
     return """<h2>⚠️ Attendance already marked</h2>"""
 
 # =========================
-# 📊 STATS (date + session breakdown)
+# 📊 STATS
 # =========================
 def build_day_stats(date_str, session_filter=None):
-    """Shared by /stats (HTML view) and /stats/download (CSV export) so
-    both always report the exact same numbers. session_filter, if given,
-    restricts attendees/total to that one session — session_stats always
-    covers all sessions for the day regardless, so the summary table stays
-    a full breakdown even when a single session is selected."""
     if time.time() - student_map_last_fetch > STUDENT_MAP_CACHE_TTL:
         refresh_student_map()
 
     total_attended = 0
     attendees = []
-    # session name -> {"total": n}
     session_stats = {}
 
     for row in records_cache:
@@ -1064,13 +861,6 @@ if __name__ == "__main__":
     HOST = "0.0.0.0"
     PORT = int(os.environ.get("PORT") or os.environ.get("APP_PORT", "8000"))
 
-    # Flask's built-in dev server is single-process and not meant to hold
-    # up under ~200 near-simultaneous requests reliably (connection queuing,
-    # dropped keep-alives, etc). waitress is a pure-Python production WSGI
-    # server that works out of the box on Windows (unlike gunicorn) and
-    # handles bursts like this comfortably with a modest thread pool.
-    #
-    # Install once with:  pip install waitress
     try:
         from waitress import serve
         WAITRESS_THREADS = int(os.environ.get("WAITRESS_THREADS", "48"))
