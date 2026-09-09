@@ -256,14 +256,15 @@
             const html = await res.text();
             document.getElementById('result').innerHTML = html;
 
-            // Attendance succeeded -> now, and only now, fetch and reveal
-            // the question form. /form-embed independently re-checks (via
-            // the session cookie) that attendance was actually marked
-            // before it will hand back the URL, so this isn't just a
-            // client-side gate — a student can't skip ahead by editing JS.
-            if (html.includes('class="success"')) {
-                await revealQuestionForm();
-            }
+            // Always try to reveal the form link after any /submit
+            // response, rather than guessing from the message text.
+            // /form-embed is the real gatekeeper — it checks the actual
+            // session cookie state, which server.py now correctly sets
+            // for every "you're covered" case (fresh success, duplicate
+            // device, duplicate session). A genuine failure (invalid QR,
+            // wrong domain, etc.) never sets that cookie, so /form-embed
+            // will correctly refuse and show its own message instead.
+            await revealQuestionForm();
         } catch (err) {
             // The request itself may still have reached the server and
             // succeeded even though we didn't get a response back (dropped
@@ -291,8 +292,19 @@
         try {
             const res = await fetch('/form-embed', { credentials: 'same-origin' });
             if (!res.ok) {
+                let message = "Couldn't load the question form. Please contact your instructor.";
+                try {
+                    const errData = await res.json();
+                    if (errData.error === 'attendance_not_marked') {
+                        // Genuinely not marked yet in this browser session
+                        // (e.g. session cookie was lost) — different from
+                        // a server/config problem, so say so plainly
+                        // rather than pointing at the instructor.
+                        message = "We couldn't confirm your attendance in this browser. Please mark attendance again.";
+                    }
+                } catch (parseErr) { /* fall back to the generic message above */ }
                 formWrap.innerHTML =
-                    "<p style='color:#dc2626; text-align:center;'>Couldn't load the question form. Please contact your instructor.</p>";
+                    "<p style='color:#dc2626; text-align:center;'>" + message + "</p>";
                 return;
             }
             const data = await res.json();
