@@ -719,20 +719,58 @@ def submit():
     category = session_category(session_choice)
 
     fp_key = f"{fingerprint}_{category}_{today}"
+    session_marker = f"{category}_{today}"
+
+    # Check whether THIS verified student is the one who already used
+    # today's slot — checked before the device-fingerprint check so we can
+    # tell "same student, different browser" apart from "different student
+    # borrowing an already-used phone" (see below).
+    with attendance_lock:
+        own_already_marked = (student_id, today, category) in attendance_set
 
     with fingerprint_lock:
         if fp_key in fingerprint_set:
-            return "<h2>❌ Attendance already marked from this device today</h2>"
+            if own_already_marked:
+                # Same verified student, just a different browser session
+                # on the same device (cookies cleared, fresh tab, etc.) —
+                # mark THIS session as covered so /form-embed still hands
+                # back the form link here, instead of leaving a genuinely
+                # already-attended student stuck with no way to reach it.
+                done_list = session.get("attendance_done_sessions", [])
+                if session_marker not in done_list:
+                    done_list.append(session_marker)
+                    session["attendance_done_sessions"] = done_list
+                return "<h2 class=\"warning\">⚠️ Attendance already marked from this device today.</h2>"
+            else:
+                # A DIFFERENT student is signed in, but this device already
+                # marked someone else's attendance today. Reject outright —
+                # do not mark this session as covered, so /form-embed will
+                # correctly refuse to hand over the form link too. This is
+                # what stops one student marking (and unlocking the quiz)
+                # for a friend on their behalf from the same phone.
+                return "<h2>❌ This device has already been used to mark someone else's attendance today. Please use your own device.</h2>"
 
     done_list = session.get("attendance_done_sessions", [])
-    session_marker = f"{category}_{today}"
     if session_marker in done_list:
         return "<h2>⚠️ This device has already submitted attendance today.</h2>"
 
     row = [student_id, today, now, session_choice]
 
     with attendance_lock:
+        if own_already_marked:
+            # This student was already marked (checked above) — mark THIS
+            # session as covered too, same as the device case above, so
+            # /form-embed still hands back the form link here.
+            if session_marker not in done_list:
+                done_list.append(session_marker)
+                session["attendance_done_sessions"] = done_list
+            return duplicate_response()
         if (student_id, today, category) in attendance_set:
+            # Rare race: another request for this same student slipped in
+            # between our check above and now. Same handling as above.
+            if session_marker not in done_list:
+                done_list.append(session_marker)
+                session["attendance_done_sessions"] = done_list
             return duplicate_response()
         attendance_set.add((student_id, today, category))
 
@@ -766,7 +804,7 @@ def form_embed():
 
 
 def duplicate_response():
-    return """<h2>⚠️ Attendance already marked</h2>"""
+    return '<h2 class="warning">⚠️ Attendance already marked. You can still access the form below.</h2>'
 
 # =========================
 # 📊 STATS
